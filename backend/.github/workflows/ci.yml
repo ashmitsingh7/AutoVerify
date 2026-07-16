@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  core-tests:
+    name: AutoVerify Core (Perl) tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Core test suite
+        run: |
+          for f in t/*.t; do
+            echo "=== $f ==="
+            perl "$f"
+          done
+      - name: Verify byte-identical golden output
+        run: perl t/03_regression_vs_original.t
+
+  backend-tests:
+    name: Backend (Python) tests + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install ruff
+      - name: Lint (ruff)
+        run: ruff check backend/app backend/tests
+      - name: Run backend test suite
+        run: |
+          cd backend
+          python -m pytest tests/ -v
+
+  docker-build:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    needs: [core-tests, backend-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t autoverify-api -f Dockerfile .
+      - name: Smoke test the built image
+        run: |
+          docker run -d -p 8000:8000 --name autoverify-smoke autoverify-api
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health; then break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:8000/health
+          docker logs autoverify-smoke
+          docker stop autoverify-smoke
+
+  verify-generated-output:
+    name: Verify a real generate() call end-to-end
+    runs-on: ubuntu-latest
+    needs: [core-tests, backend-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Generate a testbench via the API and inspect the zip
+        run: |
+          cd backend
+          python - <<'PY'
+          import zipfile, io, sys
+          from fastapi.testclient import TestClient
+          from app.main import app
+
+          c = TestClient(app)
+          rtl = open("../examples/counter.v").read()
+          r = c.post("/generate", json={"rtl": rtl})
+          assert r.status_code == 200, r.text
+          body = r.json()
+          assert body["module_name"] == "counter"
+          assert body["num_files"] == 9
+
+          d = c.post("/download", json={"job_id": body["job_id"]})
+          assert d.status_code == 200
+          z = zipfile.ZipFile(io.BytesIO(d.content))
+          required = {"counter_scoreboard.sv", "counter_tb_top.sv", "run_sim.tcl", "Makefile", "README.md"}
+          missing = required - set(z.namelist())
+          assert not missing, f"zip missing: {missing}"
+          print("verify-generated-output: OK")
+          PY

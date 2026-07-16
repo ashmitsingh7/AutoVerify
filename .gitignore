@@ -1,0 +1,30 @@
+# --- Node / Next.js (frontend) ---
+node_modules/
+.next/
+.vercel/
+*.tsbuildinfo
+.env*.local
+
+# --- Python (backend) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+backend/backend/app/jobs/*
+!backend/backend/app/jobs/.gitkeep
+
+# --- Build / dist ---
+build/
+dist/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# --- Logs / temp ---
+*.log
+*.tmp
